@@ -42,6 +42,7 @@ import org.yasvara.pentas.ui.kit.SwitchRow
 import org.yasvara.pentas.ui.kit.Sym
 import org.yasvara.pentas.ui.theme.PentasTheme
 import org.yasvara.pentas.ui.tuning.ClockEditor
+import org.yasvara.pentas.ui.tuning.ClockWarningCard
 
 /** The system-wide baseline every game starts from: clocks, thermal scene, charging. */
 class GlobalActivity : ComponentActivity() {
@@ -108,11 +109,29 @@ private fun Global(finish: () -> Unit) {
                 NavRow(Sym.Add, "Charging curves", null, ids.size, ids.size + 1) { ChargingProfileListActivity.start(ctx) }
             }
         }
-        if (DeviceSupport.bypassCharging) Block {
-            SwitchRow("Bypass charging", bypass, {
-                bypass = it
-                Settings.System.putIntForUser(cr, ThermalProfiles.KEY_BYPASS_CHARGING, if (it) 1 else 0, UserHandle.USER_CURRENT)
-            })
+        if (DeviceSupport.bypassCharging) {
+            var showBypassCaution by remember { mutableStateOf(false) }
+            Block {
+                SwitchRow("Bypass charging", bypass, { enable ->
+                    if (enable && !bypass) {
+                        showBypassCaution = true
+                    } else {
+                        bypass = false
+                        Settings.System.putIntForUser(cr, ThermalProfiles.KEY_BYPASS_CHARGING, 0, UserHandle.USER_CURRENT)
+                    }
+                })
+            }
+            if (showBypassCaution) ClockWarningCard(
+                title = "Caution: Bypass Charging",
+                message = "Bypass charging routes power directly from the charger to the system board without charging the battery.\n\nEnsure a stable, high-wattage power supply (PD/QC 30W+ recommended). If disconnected or if power drops under peak load, the device may power off instantly.",
+                confirmLabel = "Enable at own risk",
+                onConfirm = {
+                    bypass = true
+                    Settings.System.putIntForUser(cr, ThermalProfiles.KEY_BYPASS_CHARGING, 1, UserHandle.USER_CURRENT)
+                    showBypassCaution = false
+                },
+                onDismiss = { showBypassCaution = false },
+            )
         }
     }
 }

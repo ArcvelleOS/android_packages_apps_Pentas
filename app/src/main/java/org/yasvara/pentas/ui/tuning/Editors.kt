@@ -14,14 +14,20 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -61,12 +67,14 @@ import org.yasvara.pentas.touch.KernelTouchFilterClient
 import org.yasvara.pentas.touch.RateMeter
 import org.yasvara.pentas.ui.kit.Block
 import org.yasvara.pentas.ui.kit.Glyph
+import org.yasvara.pentas.ui.kit.Kit
 import org.yasvara.pentas.ui.kit.RangeSlider
 import org.yasvara.pentas.ui.kit.Section
 import org.yasvara.pentas.ui.kit.Segmented
 import org.yasvara.pentas.ui.kit.SettingRow
 import org.yasvara.pentas.ui.kit.Slider
 import org.yasvara.pentas.ui.kit.SwitchRow
+import org.yasvara.pentas.ui.kit.Sym
 import org.yasvara.pentas.ui.kit.Tag
 import org.yasvara.pentas.ui.kit.Toggle
 import org.yasvara.pentas.ui.kit.label
@@ -160,6 +168,11 @@ fun GraphicsEditor(pkg: String, game: Boolean = true) {
         }
         var gpuComp by remember(pkg) { mutableStateOf(t.perApp().gpuComposition(pkg)) }
         SwitchRow("GPU composition", gpuComp, { gpuComp = it; t.perApp().setGpuComposition(pkg, it) }, tag = { LiveTag() })
+        Text(
+            "Forces 2D GPU rendering composition. If you notice UI flickering or graphical artifacts in certain apps, turn this off.",
+            style = label(11.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -218,9 +231,9 @@ fun GameClocks(pkg: String) {
     if (confirmScope && tuningAvailable) ClockWarningCard(
         title = if (pendingScope == PerfTuner.ClockScope.GLOBAL) "Use global clocks for this game?" else "Use this game's clocks?",
         message = if (pendingScope == PerfTuner.ClockScope.GLOBAL) {
-            "This game will follow the global CPU and GPU limits. Higher limits can increase heat and battery drain, and thermal control may still reduce performance."
+            "This game will follow global CPU and GPU limits. Thermal control may adjust clocks dynamically during gameplay."
         } else {
-            "This game will stop following global limits and use its saved CPU and GPU settings. They can increase heat and battery drain or reduce stability and performance."
+            "This game will use custom clock limits instead of the global baseline. Custom frequencies may affect battery life, thermals, or frame pacing."
         },
         confirmLabel = if (pendingScope == PerfTuner.ClockScope.GLOBAL) "Use global" else "Use game limits",
         onConfirm = {
@@ -250,6 +263,13 @@ fun ClockEditor(
     onCommit: (PerfTuner.PerfProfile) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    val perfPrefs = remember(context) { context.getSharedPreferences("perf_tuner_ui", Context.MODE_PRIVATE) }
+    val scopeKey = warningKey.toString()
+    var tuningEnabled by remember(scopeKey, profile) {
+        mutableStateOf(!profile.isDefault && perfPrefs.getBoolean("manual_tuning_$scopeKey", false))
+    }
+    var showEnableCautionDialog by remember { mutableStateOf(false) }
     var draftProfile by remember(profile) { mutableStateOf(profile) }
     var showClockConfirmation by remember { mutableStateOf(false) }
     var clockWarningAcknowledged by remember(warningKey) { mutableStateOf(false) }
@@ -267,6 +287,7 @@ fun ClockEditor(
         if (!tuningAvailable) {
             draftProfile = profile
             showClockConfirmation = false
+            showEnableCautionDialog = false
         }
         onAvailabilityChanged(tuningAvailable)
     }
@@ -305,19 +326,41 @@ fun ClockEditor(
             delay(1500)
         }
     }
-    if (tuningAvailable && editable) Text(
-        "Recommended: keep Default clocks. Changing limits can increase heat, drain, instability or reduce performance. Pentas asks before applying a clock change.",
-        Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-        style = label(11.sp),
-        color = cs.onSurfaceVariant,
-    )
+    if (tuningAvailable && editable) {
+        Block(padding = 10.dp) {
+            SwitchRow(
+                "Manual clock tuning",
+                tuningEnabled,
+                onChange = { enable ->
+                    if (enable) {
+                        showEnableCautionDialog = true
+                    } else {
+                        tuningEnabled = false
+                        perfPrefs.edit().putBoolean("manual_tuning_$scopeKey", false).apply()
+                        applyClockChange(PerfTuner.PerfProfile())
+                    }
+                },
+                tag = { if (tuningEnabled) Tag("Active", warn = true) else Tag("Default (Safe)") },
+            )
+        }
+        Text(
+            if (tuningEnabled) {
+                "Caution: Manual tuning active. If you encounter thermal throttling, battery drain, or stutters, toggle off to revert to stock defaults."
+            } else {
+                "Hardware frequencies are managed automatically by the kernel. Enable above to configure manual clock boundaries at your own risk."
+            },
+            Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            style = label(11.sp),
+            color = if (tuningEnabled) cs.error else cs.onSurfaceVariant,
+        )
+    }
     if (cpuRanges.isNotEmpty()) Block(padding = 10.dp) {
         cpuRanges.forEach { c ->
             val t = draftProfile.clusters[c.policyIndex] ?: PerfTuner.ClusterTuning()
-            val accessGranted = if (capabilitiesReady) writableCpu[c.policyIndex] == true else null
+            val accessGranted = if (capabilitiesReady) (writableCpu[c.policyIndex] == true && tuningEnabled) else null
             ClockRange(
                 c.name, c.availableKhz, t.minKhz ?: c.hwMinKhz, t.maxKhz ?: c.hwMaxKhz, live[c.policyIndex] ?: 0L,
-                editable && accessGranted == true, accessGranted,
+                editable && tuningEnabled && writableCpu[c.policyIndex] == true, accessGranted,
                 format = { "%.2f".format(it / 1e6) }, unit = "GHz",
             ) { lo, hi ->
                 val tuned = t.copy(minKhz = lo.takeIf { it != c.hwMinKhz }, maxKhz = hi.takeIf { it != c.hwMaxKhz })
@@ -328,11 +371,12 @@ fun ClockEditor(
     val gpu = gpuInfo
     if (hasGpuRange) Block(padding = 10.dp) {
         val detectedGpu = requireNotNull(gpu)
+        val gpuAccess = if (capabilitiesReady) (writableGpu && tuningEnabled) else null
         ClockRange(
             "GPU", detectedGpu.availableHz, draftProfile.gpuMinHz ?: detectedGpu.hwMinHz,
             draftProfile.gpuMaxHz ?: detectedGpu.hwMaxHz, gpuCap,
-            editable && capabilitiesReady && writableGpu,
-            if (capabilitiesReady) writableGpu else null,
+            editable && capabilitiesReady && writableGpu && tuningEnabled,
+            gpuAccess,
             format = { "${it / 1_000_000}" }, unit = "MHz",
         ) { lo, hi ->
             applyClockChange(draftProfile.copy(
@@ -343,7 +387,7 @@ fun ClockEditor(
     }
     val unavailableCpu = cpuRanges.any { writableCpu[it.policyIndex] == false }
     if (capabilitiesReady && (unavailableCpu || hasGpuRange && !writableGpu)) Text(
-        "Manual clock tuning is unavailable for these controls. Your ROM manages their limits automatically; monitoring still works.",
+        "Manual clock tuning is unavailable for some controls on this kernel. Monitoring still works.",
         Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
         style = label(11.sp),
         color = cs.onSurfaceVariant,
@@ -360,14 +404,32 @@ fun ClockEditor(
         style = label(11.sp),
         color = cs.onSurfaceVariant,
     )
-    if (editable && tuningAvailable && !draftProfile.isDefault) Text(
-        "Reset to stock",
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { applyClockChange(PerfTuner.PerfProfile()) }.padding(8.dp),
+    if (editable && tuningAvailable && (!draftProfile.isDefault || tuningEnabled)) Text(
+        "Reset to stock and disable",
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
+            tuningEnabled = false
+            perfPrefs.edit().putBoolean("manual_tuning_$scopeKey", false).apply()
+            applyClockChange(PerfTuner.PerfProfile())
+        }.padding(8.dp),
         style = label(12.sp, 600), color = cs.error,
+    )
+    if (showEnableCautionDialog && tuningAvailable) ClockWarningCard(
+        title = "Caution: Performance Tuning",
+        message = "Manual CPU and GPU clock control is intended for advanced users only.\n\nAltering frequency limits beyond stock configurations can cause thermal throttling, rapid battery drain, app crashes, or unexpected reboots.\n\nProceed at your own risk. You can disable this toggle at any time to immediately restore stock hardware scaling.",
+        confirmLabel = "Enable at own risk",
+        onConfirm = {
+            tuningEnabled = true
+            perfPrefs.edit().putBoolean("manual_tuning_$scopeKey", true).apply()
+            clockWarningAcknowledged = true
+            showEnableCautionDialog = false
+        },
+        onDismiss = {
+            showEnableCautionDialog = false
+        },
     )
     if (showClockConfirmation && tuningAvailable) ClockWarningCard(
         title = "Apply clock limits?",
-        message = "CPU or GPU limits can raise heat and battery drain, reduce stability or lower performance. Keep Default unless you have a specific reason to tune them.",
+        message = "Custom frequency limits can increase temperature and power draw or reduce stability. Default clocks are recommended for optimal efficiency.",
         confirmLabel = "Apply limits",
         onConfirm = {
             clockWarningAcknowledged = true
@@ -379,7 +441,7 @@ fun ClockEditor(
 }
 
 @Composable
-private fun ClockWarningCard(
+internal fun ClockWarningCard(
     title: String,
     message: String,
     confirmLabel: String,
@@ -388,18 +450,67 @@ private fun ClockWarningCard(
 ) {
     val cs = MaterialTheme.colorScheme
     val view = LocalView.current
-    Block(color = cs.tertiaryContainer, padding = 12.dp) {
-        Text(title, style = label(15.sp, 650), color = cs.onTertiaryContainer)
-        Text(message, style = label(12.sp), color = cs.onTertiaryContainer)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = {
-                view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
-                onDismiss()
-            }) { Text("Cancel") }
-            TextButton(onClick = {
-                view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
-                onConfirm()
-            }) { Text(confirmLabel) }
+    val isCaution = title.contains("Caution", ignoreCase = true)
+    Block(
+        modifier = Modifier.border(
+            1.dp,
+            if (isCaution) cs.error.copy(alpha = 0.5f) else cs.primary.copy(alpha = 0.35f),
+            RoundedCornerShape(Kit.Card),
+        ),
+        color = cs.surfaceContainerHigh,
+        padding = 14.dp,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = if (isCaution) Sym.Info else Sym.Speed,
+                contentDescription = null,
+                tint = if (isCaution) cs.error else cs.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                title,
+                style = label(15.sp, 650),
+                color = if (isCaution) cs.error else cs.onSurface,
+            )
+        }
+        Text(
+            message,
+            style = label(12.5.sp),
+            color = cs.onSurfaceVariant,
+            lineHeight = 18.sp,
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = {
+                    view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.textButtonColors(contentColor = cs.onSurfaceVariant),
+            ) {
+                Text("Cancel", style = label(13.sp, 600))
+            }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = {
+                    view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
+                    onConfirm()
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isCaution) cs.error else cs.primary,
+                    contentColor = if (isCaution) cs.onError else cs.onPrimary,
+                ),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+            ) {
+                Text(confirmLabel, style = label(13.sp, 600))
+            }
         }
     }
 }

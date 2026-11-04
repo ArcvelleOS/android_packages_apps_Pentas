@@ -14,6 +14,7 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.yasvara.pentas.thermal.ThermalProfiles
 import org.yasvara.pentas.ui.theme.PentasTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -199,6 +201,24 @@ private fun ListRoot(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 item { Spacer(Modifier.height(4.dp)) }
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Icon(Sym.Info, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+                            Text(
+                                "Caution: Custom thermal curves directly alter kernel throttling thresholds. Higher trip points sustain performance but increase device surface temperatures.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                lineHeight = 17.sp,
+                            )
+                        }
+                    }
+                }
                 itemsIndexed(profiles) { index, profile ->
                     ProfileRow(
                         profile = profile,
